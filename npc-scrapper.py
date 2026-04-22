@@ -1,7 +1,8 @@
 """
 ============================================================
-  Nigeria Property Centre — Full Agent Contact Scraper
-  Site: https://nigeriapropertycentre.com/agents
+  Nigeria Property Centre — Lagos Agent Contact Scraper
+  Site: https://nigeriapropertycentre.com/lagos/agents
+  Total Lagos agents: ~2,907
 ============================================================
 
 SETUP (run once in your terminal):
@@ -9,14 +10,14 @@ SETUP (run once in your terminal):
     crawl4ai-setup
 
 RUN:
-    python npc_contacts.py
+    python lagos_agents.py
 
 RESUME (if interrupted, just run again — picks up where it left off):
-    python npc_contacts.py
+    python lagos_agents.py
 
 OUTPUT:
-    agent_contacts.csv   — name, phone, whatsapp, address, website, profile_url
-    progress.txt         — tracks completed agents (used for resuming)
+    lagos_agent_contacts.csv   — name, phone, whatsapp, address, website, profile_url
+    lagos_progress.txt         — tracks completed agents (used for resuming)
 ============================================================
 """
 
@@ -32,11 +33,11 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 # ─────────────────────────────────────────────
 #  SETTINGS
 # ─────────────────────────────────────────────
-BASE_URL     = "https://nigeriapropertycentre.com/agents"
-DELAY        = 2.0                  # seconds between requests
-OUTPUT_FILE  = "agent_contacts.csv"
-PROGRESS_LOG = "progress.txt"       # tracks done URLs for resuming
-SAVE_EVERY   = 25                   # write to CSV every N agents
+BASE_URL     = "https://nigeriapropertycentre.com/lagos/agents"
+DELAY        = 2.0
+OUTPUT_FILE  = "lagos_agent_contacts.csv"
+PROGRESS_LOG = "lagos_progress.txt"
+SAVE_EVERY   = 25
 # ─────────────────────────────────────────────
 
 CSV_FIELDS = ["name", "phone", "whatsapp", "address", "website", "profile_url"]
@@ -62,10 +63,10 @@ run_cfg = CrawlerRunConfig(
 
 
 # ─────────────────────────────────────────────
-#  STEP 1: get agent links from listing pages
+#  HELPERS
 # ─────────────────────────────────────────────
 def parse_listing_page(markdown: str) -> list:
-    """Extract agent profile URLs from a listing page."""
+    """Extract all agent profile URLs from a listing page."""
     pattern = r'https://nigeriapropertycentre\.com/agents/[a-z0-9\-]+-\d+'
     links = re.findall(pattern, markdown)
     seen, unique = set(), []
@@ -76,9 +77,6 @@ def parse_listing_page(markdown: str) -> list:
     return unique
 
 
-# ─────────────────────────────────────────────
-#  STEP 2: extract contacts from profile page
-# ─────────────────────────────────────────────
 def parse_profile_page(markdown: str, url: str) -> dict:
     """Extract contact details from an individual agent profile page."""
     contact = {
@@ -113,9 +111,6 @@ def parse_profile_page(markdown: str, url: str) -> dict:
     return contact
 
 
-# ─────────────────────────────────────────────
-#  CSV / PROGRESS HELPERS
-# ─────────────────────────────────────────────
 def append_to_csv(rows: list):
     file_exists = os.path.exists(OUTPUT_FILE)
     with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
@@ -126,7 +121,6 @@ def append_to_csv(rows: list):
 
 
 def init_csv():
-    """Create a fresh CSV with just the header."""
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
@@ -159,7 +153,7 @@ def eta_str(done: int, total: int, elapsed: float) -> str:
 # ─────────────────────────────────────────────
 async def main():
     print("\n" + "=" * 58)
-    print("  Nigeria Property Centre — Agent Contact Scraper")
+    print("  Nigeria Property Centre — Lagos Agent Scraper")
     print("=" * 58)
 
     done_urls = load_done()
@@ -170,25 +164,25 @@ async def main():
 
     async with AsyncWebCrawler(config=browser_cfg) as crawler:
 
-        # ── STEP 1: Collect all agent profile URLs ───────────────────
-        print("\n📋 STEP 1: Collecting all agent profile URLs...")
+        # ── STEP 1: Collect all Lagos agent profile URLs ─────────────
+        print("\n📋 STEP 1: Collecting all Lagos agent profile URLs...")
         if is_resume:
             print(f"   (Resuming — {len(done_urls):,} agents already done)\n")
         else:
-            print()
+            print(f"   (~2,907 agents across ~146 pages)\n")
 
         all_profile_urls = []
         page = 1
 
         while True:
             url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
-            print(f"  → Listing page {page} ...", end=" ", flush=True)
+            print(f"  → Page {page} ...", end=" ", flush=True)
 
             result = await crawler.arun(url=url, config=run_cfg)
 
             if not result.success:
                 print(f"FAILED ({result.error_message})")
-                print("  Stopping collection early.")
+                print("  Stopping — saving what we have.")
                 break
 
             links = parse_listing_page(result.markdown.raw_markdown)
@@ -203,10 +197,10 @@ async def main():
             page += 1
             await asyncio.sleep(DELAY)
 
-        # Filter out already-scraped URLs
-        todo = [u for u in all_profile_urls if u not in done_urls]
-        total = len(all_profile_urls)
-        already_done = total - len(todo)
+        # Filter out already-done URLs
+        todo          = [u for u in all_profile_urls if u not in done_urls]
+        total         = len(all_profile_urls)
+        already_done  = total - len(todo)
 
         print(f"\n  Total agents   : {total:,}")
         print(f"  Already done   : {already_done:,}")
@@ -216,16 +210,16 @@ async def main():
         # ── STEP 2: Visit each profile and extract contacts ──────────
         print(f"\n📇 STEP 2: Scraping agent contact details...\n")
 
-        batch = []
+        batch      = []
         step_start = time.time()
 
         for i, url in enumerate(todo, 1):
             overall_done = already_done + i
-            pct = overall_done / total * 100
+            pct      = overall_done / total * 100
             bar_done = int(pct / 2)
-            bar = "█" * bar_done + "░" * (50 - bar_done)
-            elapsed = time.time() - step_start
-            eta = eta_str(i, len(todo), elapsed)
+            bar      = "█" * bar_done + "░" * (50 - bar_done)
+            elapsed  = time.time() - step_start
+            eta      = eta_str(i, len(todo), elapsed)
             print(f"\r  [{bar}] {pct:.1f}% | {overall_done:,}/{total:,} | ETA: {eta}   ",
                   end="", flush=True)
 
@@ -236,26 +230,24 @@ async def main():
                     batch.append(contact)
                 mark_done(url)
             except Exception:
-                mark_done(url)  # mark as done anyway to avoid infinite retries
+                mark_done(url)
 
-            # Auto-save every SAVE_EVERY agents
             if len(batch) >= SAVE_EVERY:
                 append_to_csv(batch)
                 batch = []
 
             await asyncio.sleep(DELAY)
 
-        # Save any remaining
         if batch:
             append_to_csv(batch)
 
         print()  # newline after progress bar
 
-    # ── DONE ─────────────────────────────────────────────────────────
+    # ── SUMMARY ──────────────────────────────────────────────────────
     total_done = len(load_done())
-    elapsed = time.time() - step_start
-    h, r = divmod(int(elapsed), 3600)
-    m, s = divmod(r, 60)
+    elapsed    = time.time() - step_start
+    h, r       = divmod(int(elapsed), 3600)
+    m, s       = divmod(r, 60)
 
     print(f"\n{'=' * 58}")
     print(f"  🎉 ALL DONE!")
