@@ -36,7 +36,7 @@ BASE_URL     = "https://nigeriapropertycentre.com/agents"
 DELAY        = 2.0                  # seconds between requests
 OUTPUT_FILE  = "agent_contacts.csv"
 PROGRESS_LOG = "progress.txt"       # tracks done URLs for resuming
-SAVE_EVERY   = 25                   # write to CSV every N agents
+SAVE_EVERY   = 50                   # write to CSV every N agents
 # ─────────────────────────────────────────────
 
 CSV_FIELDS = ["name", "phone", "whatsapp", "address", "website", "profile_url"]
@@ -53,8 +53,8 @@ browser_cfg = BrowserConfig(
 
 run_cfg = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,
-    wait_until="networkidle",
-    page_timeout=30000,
+    wait_until="domcontentloaded",
+    page_timeout=60000,
     simulate_user=True,
     magic=True,
     delay_before_return_html=2.0,
@@ -184,10 +184,20 @@ async def main():
             url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
             print(f"  → Listing page {page} ...", end=" ", flush=True)
 
-            result = await crawler.arun(url=url, config=run_cfg)
+            retries = 3
+            for attempt in range(retries):
+                result = await crawler.arun(url=url, config=run_cfg)
+                if result.success:
+                    break
+                print(f"Listing attempt {attempt + 1} failed. ", end="")
+                if attempt < retries - 1:
+                    wait_time = (attempt + 1) * 5
+                    print(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                else:
+                    print(f"FAILED after {retries} attempts ({result.error_message})")
 
             if not result.success:
-                print(f"FAILED ({result.error_message})")
                 print("  Stopping collection early.")
                 break
 
@@ -230,12 +240,24 @@ async def main():
                   end="", flush=True)
 
             try:
-                result = await crawler.arun(url=url, config=run_cfg)
-                if result.success:
-                    contact = parse_profile_page(result.markdown.raw_markdown, url)
-                    batch.append(contact)
+                retries = 3
+                success = False
+                for attempt in range(retries):
+                    result = await crawler.arun(url=url, config=run_cfg)
+                    if result.success:
+                        contact = parse_profile_page(result.markdown.raw_markdown, url)
+                        batch.append(contact)
+                        success = True
+                        break
+                    if attempt < retries - 1:
+                        await asyncio.sleep((attempt + 1) * 5)
+
+                if not success:
+                    print(f"\n  ! Failed to scrape profile: {url}")
+
                 mark_done(url)
-            except Exception:
+            except Exception as e:
+                print(f"\n  ! Error scraping {url}: {e}")
                 mark_done(url)  # mark as done anyway to avoid infinite retries
 
             # Auto-save every SAVE_EVERY agents
