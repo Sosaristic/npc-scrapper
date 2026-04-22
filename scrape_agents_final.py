@@ -28,7 +28,7 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 #  SETTINGS  — change these as needed
 # ─────────────────────────────────────────────
 BASE_URL      = "https://nigeriapropertycentre.com/agents"
-MAX_PAGES     = 5          # pages of agent listings to crawl (20 agents per page)
+MAX_PAGES     = 1          # pages of agent listings to crawl (20 agents per page)
                            # change to None to scrape ALL 16,000+ agents (takes hours)
 DELAY_SECONDS = 2.0        # wait between requests — keeps you from getting blocked
 OUTPUT_FILE   = "agents_contacts.csv"
@@ -49,11 +49,11 @@ browser_cfg = BrowserConfig(
 # Crawl config — waits for page to fully load, simulates human behaviour
 run_cfg = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,      # always fetch fresh (not cached)
-    wait_until="networkidle",         # wait for JS to finish loading
-    page_timeout=30000,               # 30 second timeout per page
+    wait_until="domcontentloaded",    # wait for DOM instead of full network idle
+    page_timeout=60000,               # 60 second timeout per page
     simulate_user=True,               # simulate mouse movement
     magic=True,                       # extra anti-bot bypass
-    delay_before_return_html=2.0,     # extra wait for dynamic content
+    delay_before_return_html=5.0,     # extra wait for dynamic content
 )
 
 
