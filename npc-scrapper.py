@@ -1,6 +1,6 @@
 """
 ============================================================
-  Nigeria Property Centre — Agent Profile Scraper
+  Nigeria Property Centre — Full Agent Contact Scraper
   Site: https://nigeriapropertycentre.com/agents
 ============================================================
 
@@ -9,15 +9,20 @@ SETUP (run once in your terminal):
     crawl4ai-setup
 
 RUN:
-    python npc_profiles.py
+    python npc_contacts.py
+
+RESUME (if interrupted, just run again — picks up where it left off):
+    python npc_contacts.py
 
 OUTPUT:
-    agent_profiles.csv  — name, address, profile_url for all agents
+    agent_contacts.csv   — name, phone, whatsapp, address, website, profile_url
+    progress.txt         — tracks completed agents (used for resuming)
 ============================================================
 """
 
 import asyncio
 import csv
+import os
 import re
 import time
 
@@ -27,11 +32,14 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 # ─────────────────────────────────────────────
 #  SETTINGS
 # ─────────────────────────────────────────────
-BASE_URL    = "https://nigeriapropertycentre.com/agents"
-DELAY       = 2.0
-OUTPUT_FILE = "agent_profiles.csv"
+BASE_URL     = "https://nigeriapropertycentre.com/agents"
+DELAY        = 2.0                  # seconds between requests
+OUTPUT_FILE  = "agent_contacts.csv"
+PROGRESS_LOG = "progress.txt"       # tracks done URLs for resuming
+SAVE_EVERY   = 25                   # write to CSV every N agents
 # ─────────────────────────────────────────────
 
+CSV_FIELDS = ["name", "phone", "whatsapp", "address", "website", "profile_url"]
 
 browser_cfg = BrowserConfig(
     headless=True,
@@ -52,92 +60,211 @@ run_cfg = CrawlerRunConfig(
     delay_before_return_html=2.0,
 )
 
-CSV_FIELDS = ["name", "address", "profile_url"]
+
+# ─────────────────────────────────────────────
+#  STEP 1: get agent links from listing pages
+# ─────────────────────────────────────────────
+def parse_listing_page(markdown: str) -> list:
+    """Extract agent profile URLs from a listing page."""
+    pattern = r'https://nigeriapropertycentre\.com/agents/[a-z0-9\-]+-\d+'
+    links = re.findall(pattern, markdown)
+    seen, unique = set(), []
+    for link in links:
+        if link not in seen:
+            seen.add(link)
+            unique.append(link)
+    return unique
 
 
-def parse_agents_from_page(markdown: str) -> list:
-    """
-    Extract agent name, address, and profile URL
-    directly from a listing page — no need to visit each profile.
-    """
-    agents = []
+# ─────────────────────────────────────────────
+#  STEP 2: extract contacts from profile page
+# ─────────────────────────────────────────────
+def parse_profile_page(markdown: str, url: str) -> dict:
+    """Extract contact details from an individual agent profile page."""
+    contact = {
+        "name":        "",
+        "phone":       "",
+        "whatsapp":    "",
+        "address":     "",
+        "website":     "",
+        "profile_url": url,
+    }
 
-    # Each agent block looks like:
-    # ## [**Agent Name**](https://nigeriapropertycentre.com/agents/slug-id)
-    #   Address text
-    blocks = re.findall(
-        r'## \[\*\*(.+?)\*\*\]\((https://nigeriapropertycentre\.com/agents/[a-z0-9\-]+-\d+)\)'
-        r'\s*\n+\s*\n*\s*(.+?)(?=\n\n|\Z)',
-        markdown,
-        re.DOTALL
-    )
+    name = re.search(r'^# (.+)$', markdown, re.MULTILINE)
+    if name:
+        contact["name"] = name.group(1).strip()
 
-    for name, url, rest in blocks:
-        # Address is the first non-empty line after the heading
-        lines = [l.strip() for l in rest.strip().splitlines() if l.strip()]
-        address = lines[0] if lines else ""
-        # Skip lines that are links or image tags
-        if address.startswith("!") or address.startswith("[") or address.startswith("http"):
-            address = ""
+    address = re.search(r'\*\*Address\*\*\s*\n+(.+?)(?=\n\n|\*\*)', markdown, re.DOTALL)
+    if address:
+        contact["address"] = address.group(1).strip().replace('\n', ', ')
 
-        agents.append({
-            "name":        name.strip(),
-            "address":     address,
-            "profile_url": url.strip(),
-        })
+    phone = re.search(r'\*\*Phone\*\*\s*\n+(.+?)(?=\n\n|\*\*)', markdown, re.DOTALL)
+    if phone:
+        contact["phone"] = phone.group(1).strip()
 
-    return agents
+    whatsapp = re.search(r'\*\*Whatsapp\*\*\s*\n+(.+?)(?=\n\n|\*\*)', markdown, re.DOTALL)
+    if whatsapp:
+        contact["whatsapp"] = whatsapp.group(1).strip()
+
+    website = re.search(r'\*\*Website\*\*\s*\n+<?(https?://[^\s>]+)>?', markdown)
+    if website:
+        contact["website"] = website.group(1).strip()
+
+    return contact
 
 
-def save_to_csv(agents: list, mode: str = "a"):
-    file_exists = __import__("os").path.exists(OUTPUT_FILE)
-    with open(OUTPUT_FILE, mode, newline="", encoding="utf-8") as f:
+# ─────────────────────────────────────────────
+#  CSV / PROGRESS HELPERS
+# ─────────────────────────────────────────────
+def append_to_csv(rows: list):
+    file_exists = os.path.exists(OUTPUT_FILE)
+    with open(OUTPUT_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        if mode == "w" or not file_exists:
+        if not file_exists:
             writer.writeheader()
-        writer.writerows(agents)
+        writer.writerows(rows)
 
 
-async def collect():
-    total_agents = 0
-    page = 1
+def init_csv():
+    """Create a fresh CSV with just the header."""
+    with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
 
-    # Start fresh
-    save_to_csv([], mode="w")
 
-    print("\n🚀 Starting agent profile collection...\n")
+def load_done() -> set:
+    if os.path.exists(PROGRESS_LOG):
+        with open(PROGRESS_LOG, "r") as f:
+            return set(l.strip() for l in f if l.strip())
+    return set()
+
+
+def mark_done(url: str):
+    with open(PROGRESS_LOG, "a") as f:
+        f.write(url + "\n")
+
+
+def eta_str(done: int, total: int, elapsed: float) -> str:
+    if done == 0:
+        return "--"
+    rate = done / elapsed
+    secs_left = (total - done) / rate
+    h, r = divmod(int(secs_left), 3600)
+    m, s = divmod(r, 60)
+    return f"{h}h {m}m {s}s"
+
+
+# ─────────────────────────────────────────────
+#  MAIN
+# ─────────────────────────────────────────────
+async def main():
+    print("\n" + "=" * 58)
+    print("  Nigeria Property Centre — Agent Contact Scraper")
+    print("=" * 58)
+
+    done_urls = load_done()
+    is_resume = len(done_urls) > 0
+
+    if not is_resume:
+        init_csv()
 
     async with AsyncWebCrawler(config=browser_cfg) as crawler:
+
+        # ── STEP 1: Collect all agent profile URLs ───────────────────
+        print("\n📋 STEP 1: Collecting all agent profile URLs...")
+        if is_resume:
+            print(f"   (Resuming — {len(done_urls):,} agents already done)\n")
+        else:
+            print()
+
+        all_profile_urls = []
+        page = 1
+
         while True:
             url = BASE_URL if page == 1 else f"{BASE_URL}?page={page}"
-            print(f"→ Page {page}: {url}")
+            print(f"  → Listing page {page} ...", end=" ", flush=True)
 
             result = await crawler.arun(url=url, config=run_cfg)
 
             if not result.success:
-                print(f"  ✗ Failed: {result.error_message}")
-                print("  Saving what we have and stopping.")
+                print(f"FAILED ({result.error_message})")
+                print("  Stopping collection early.")
                 break
 
-            agents = parse_agents_from_page(result.markdown.raw_markdown)
+            links = parse_listing_page(result.markdown.raw_markdown)
 
-            if not agents:
-                print(f"  ✓ No more agents — reached end of listings.")
+            if not links:
+                print("end of listings.")
                 break
 
-            save_to_csv(agents, mode="a")
-            total_agents += len(agents)
-            print(f"  ✓ {len(agents)} agents saved | Total so far: {total_agents:,}")
+            all_profile_urls.extend(links)
+            print(f"✓ {len(links)} agents (total: {len(all_profile_urls):,})")
 
             page += 1
             await asyncio.sleep(DELAY)
 
-    print(f"\n🎉 Done! {total_agents:,} agent profiles saved to '{OUTPUT_FILE}'")
+        # Filter out already-scraped URLs
+        todo = [u for u in all_profile_urls if u not in done_urls]
+        total = len(all_profile_urls)
+        already_done = total - len(todo)
+
+        print(f"\n  Total agents   : {total:,}")
+        print(f"  Already done   : {already_done:,}")
+        print(f"  Left to scrape : {len(todo):,}")
+        print(f"  Est. time      : ~{len(todo) * DELAY / 3600:.1f} hrs at {DELAY}s/request")
+
+        # ── STEP 2: Visit each profile and extract contacts ──────────
+        print(f"\n📇 STEP 2: Scraping agent contact details...\n")
+
+        batch = []
+        step_start = time.time()
+
+        for i, url in enumerate(todo, 1):
+            overall_done = already_done + i
+            pct = overall_done / total * 100
+            bar_done = int(pct / 2)
+            bar = "█" * bar_done + "░" * (50 - bar_done)
+            elapsed = time.time() - step_start
+            eta = eta_str(i, len(todo), elapsed)
+            print(f"\r  [{bar}] {pct:.1f}% | {overall_done:,}/{total:,} | ETA: {eta}   ",
+                  end="", flush=True)
+
+            try:
+                result = await crawler.arun(url=url, config=run_cfg)
+                if result.success:
+                    contact = parse_profile_page(result.markdown.raw_markdown, url)
+                    batch.append(contact)
+                mark_done(url)
+            except Exception:
+                mark_done(url)  # mark as done anyway to avoid infinite retries
+
+            # Auto-save every SAVE_EVERY agents
+            if len(batch) >= SAVE_EVERY:
+                append_to_csv(batch)
+                batch = []
+
+            await asyncio.sleep(DELAY)
+
+        # Save any remaining
+        if batch:
+            append_to_csv(batch)
+
+        print()  # newline after progress bar
+
+    # ── DONE ─────────────────────────────────────────────────────────
+    total_done = len(load_done())
+    elapsed = time.time() - step_start
+    h, r = divmod(int(elapsed), 3600)
+    m, s = divmod(r, 60)
+
+    print(f"\n{'=' * 58}")
+    print(f"  🎉 ALL DONE!")
+    print(f"  Agents collected : {total_done:,}")
+    print(f"  Output file      : {OUTPUT_FILE}")
+    print(f"  Time taken       : {h}h {m}m {s}s")
+    print(f"  Open '{OUTPUT_FILE}' in Excel or Google Sheets.")
+    print(f"{'=' * 58}\n")
 
 
 if __name__ == "__main__":
-    start = time.time()
-    asyncio.run(collect())
-    elapsed = time.time() - start
-    m, s = divmod(int(elapsed), 60)
-    print(f"⏱️  Total time: {m}m {s}s\n")
+    asyncio.run(main())
