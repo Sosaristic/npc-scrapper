@@ -1,0 +1,7 @@
+agent_contacts.csv
+progress.txt
+scraper.log
+scraper_final.log
+*.log
+__pycache__/
+.crawl4ai/
