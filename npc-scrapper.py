@@ -57,8 +57,8 @@ browser_cfg = BrowserConfig(
 # ── Crawl: waits for full page load, bypasses basic anti-bot ─
 run_cfg = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,
-    wait_until="networkidle",
-    page_timeout=30000,
+    wait_until="domcontentloaded",
+    page_timeout=60000,
     simulate_user=True,
     magic=True,
     delay_before_return_html=2.0,
