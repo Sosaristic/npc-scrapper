@@ -35,8 +35,8 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 # ─────────────────────────────────────────────
 BASE_URL     = "https://nigeriapropertycentre.com/abuja/agents"
 DELAY        = 2.0
-OUTPUT_FILE  = "abuja_agent_contacts.csv"
-PROGRESS_LOG = "abuja_progress.txt"
+OUTPUT_FILE  = "data/abuja_agent_contacts.csv"
+PROGRESS_LOG = "data/abuja_progress.txt"
 SAVE_EVERY   = 25
 # ─────────────────────────────────────────────
 
@@ -54,8 +54,8 @@ browser_cfg = BrowserConfig(
 
 run_cfg = CrawlerRunConfig(
     cache_mode=CacheMode.BYPASS,
-    wait_until="networkidle",
-    page_timeout=30000,
+    wait_until="domcontentloaded",
+    page_timeout=60000,
     simulate_user=True,
     magic=True,
     delay_before_return_html=2.0,

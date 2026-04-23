@@ -1,0 +1,5 @@
+scraper.log
+data/abuja_progress.txt
+data/abuja_agent_contacts.csv
+__pycache__/
+*.pyc
